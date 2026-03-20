@@ -84,7 +84,7 @@
         ::-webkit-scrollbar { width: 5px; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
     </style>
- head>
+</head>
 <body>
 
     <!-- Sidebar Navigation -->
@@ -141,11 +141,16 @@
         <!-- Persistent HUD Header -->
         <header class="h-20 border-b border-slate-800/50 bg-slate-950/20 backdrop-blur-xl flex items-center justify-between px-10 sticky top-0 z-[100]">
             <div class="flex items-center gap-4">
-                <h2 id="viewTitle" class="font-bold text-slate-200">MASTER MONITOR</h2>
+                <h2 id="viewTitle" class="font-bold text-slate-200 uppercase">MASTER MONITOR</h2>
                 <div class="h-4 w-px bg-slate-800"></div>
                 <p id="systemTime" class="text-xs font-mono text-slate-400 tracking-tighter">--:--:--</p>
             </div>
             <div class="flex items-center gap-6">
+                <!-- HEARTBEAT MONITOR -->
+                <div class="flex flex-col items-end mr-4">
+                    <p class="text-[9px] text-slate-500 font-bold uppercase tracking-tighter">Last Heartbeat</p>
+                    <p id="lastHeartbeat" class="text-xs font-mono text-slate-300 italic">No Data</p>
+                </div>
                 <div id="connectionStatus" class="flex items-center gap-3 px-4 py-2 bg-red-500/10 text-red-500 border border-red-500/20 rounded-2xl text-[10px] font-black tracking-widest">
                     <div class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></div>
                     DISCONNECTED
@@ -306,9 +311,16 @@
 
     <script>
         // --- 1. CORE SETTINGS ---
+        // Switched to secure wss on port 8884 for maximum browser compatibility
         const BROKER = "wss://broker.hivemq.com:8884/mqtt"; 
         const TOPIC = "aifitscare/p001/vitals";
-        const client = mqtt.connect(BROKER);
+        
+        let client;
+        try {
+            client = mqtt.connect(BROKER);
+        } catch (e) {
+            console.error("MQTT Connect Error:", e);
+        }
 
         let map = null;
         let marker = null;
@@ -317,78 +329,101 @@
 
         // --- 2. VIEW SWITCHER ---
         function switchView(viewId, element) {
-            // Hide all views
             document.querySelectorAll('.view-section').forEach(s => s.classList.remove('active'));
-            // Show target
             document.getElementById('view-' + viewId).classList.add('active');
-            
-            // Update Navigation
             document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-            element.classList.add('active');
-
-            // Update Title
+            if(element) element.classList.add('active');
             document.getElementById('viewTitle').innerText = viewId.toUpperCase() + ' PORTAL';
-
-            // Refresh Map if Parent view selected
             if (viewId === 'parent' && map) {
-                setTimeout(() => map.invalidateSize(), 100);
+                setTimeout(() => map.invalidateSize(), 200);
             }
         }
 
         // --- 3. MQTT & TELEMETRY LOGIC ---
-        client.on('connect', () => {
-            const badge = document.getElementById('connectionStatus');
-            badge.className = "flex items-center gap-3 px-4 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-2xl text-[10px] font-black tracking-widest";
-            badge.innerHTML = `<div class="w-2 h-2 rounded-full bg-emerald-500"></div> CLOUD ACTIVE`;
-            client.subscribe(TOPIC);
-        });
+        if(client) {
+            client.on('connect', () => {
+                const badge = document.getElementById('connectionStatus');
+                badge.className = "flex items-center gap-3 px-4 py-2 bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 rounded-2xl text-[10px] font-black tracking-widest";
+                badge.innerHTML = <div class="w-2 h-2 rounded-full bg-emerald-500"></div> CLOUD ACTIVE;
+                client.subscribe(TOPIC, (err) => {
+                    if (err) console.error("Subscription error:", err);
+                    else console.log("Subscribed to topic:", TOPIC);
+                });
+            });
 
-        client.on('message', (topic, message) => {
-            try {
-                const data = JSON.parse(message.toString());
-                updateUI(data);
-            } catch (e) { console.error("Telemetry Error", e); }
-        });
+            client.on('error', (err) => {
+                console.error("MQTT Error:", err);
+            });
+
+            client.on('message', (topic, message) => {
+                try {
+                    const rawStr = message.toString();
+                    console.log("MQTT Received:", rawStr);
+                    const data = JSON.parse(rawStr);
+                    updateUI(data);
+                } catch (e) { 
+                    console.error("Telemetry Parse Error", e); 
+                }
+            });
+        }
 
         function updateUI(data) {
+            // Heartbeat check
+            document.getElementById('lastHeartbeat').innerText = new Date().toLocaleTimeString();
+            
+            // Extract keys based on your specific watch logs
+            // Logic: Checks both 'hr' and 'heartRate', both 'acc' and 'avg_mag'
+            const hr = data.hr || data.heartRate || 0;
+            const acc = data.acc || data.avg_mag || 0;
+            const status = data.status || data.label || "NORMAL";
+            const lat = data.lat || 12.9716;
+            const lng = data.lng || 80.2452;
+
             // Update Global Metrics
-            document.getElementById('hrVal').innerText = data.hr;
-            document.getElementById('hrValParent').innerText = data.hr;
-            document.getElementById('accVal').innerText = Number(data.acc).toFixed(2);
-            document.getElementById('geoText').innerText = `LAT: ${data.lat} | LNG: ${data.lng}`;
+            document.getElementById('hrVal').innerText = hr;
+            if(document.getElementById('hrValParent')) document.getElementById('hrValParent').innerText = hr;
+            document.getElementById('accVal').innerText = Number(acc).toFixed(2);
+            if(document.getElementById('geoText')) document.getElementById('geoText').innerText = LAT: ${lat} | LNG: ${lng};
             
             // Update Charts
-            hrHistory.push(data.hr);
-            hrHistory.shift();
-            drawSparkline('hrChartMaster', '#10b981');
-            drawSparkline('hrChartDoctor', '#10b981', true);
-
-            // Update Map
-            if (map) {
-                const pos = [data.lat, data.lng];
-                marker.setLatLng(pos);
-                radius.setLatLng(pos);
-                if(data.status.includes("SEIZURE")) map.panTo(pos);
+            if(hr > 0) {
+                hrHistory.push(hr);
+                hrHistory.shift();
+                drawSparkline('hrChartMaster', '#10b981');
+                drawSparkline('hrChartDoctor', '#10b981', true);
             }
 
-            // Alert Logic
+            // Update Map
+            if (map && marker) {
+                const pos = [lat, lng];
+                marker.setLatLng(pos);
+                if(radius) radius.setLatLng(pos);
+                if(status.includes("SEIZURE") || status.includes("FITS")) map.panTo(pos);
+            }
+
+            // Alert UI Logic
             const hud = document.getElementById('statusHUD');
             const label = document.getElementById('patientStatus');
             const dispatch = document.getElementById('dispatchBox');
+            const icon = document.getElementById('statusIcon');
 
-            if (data.status.includes("SEIZURE")) {
+            if (status.includes("SEIZURE") || status.includes("FITS")) {
                 hud.classList.add('emergency-active');
                 label.innerText = "SEIZURE DETECTED";
-                label.classList.add('text-red-500');
+                label.className = "text-5xl font-black italic tracking-tighter uppercase text-red-500";
                 dispatch.classList.remove('hidden');
-                addLogEntry("CRITICAL", "GTCS Event Confirmed. GPS Latched.");
+                icon.innerHTML = '<i data-lucide="alert-triangle" class="w-10 h-10 text-white"></i>';
+                icon.className = "p-6 rounded-[2rem] bg-red-600 shadow-lg";
+                addLogEntry("CRITICAL", "GTCS Event Confirmed. Dispatching EMS.");
             } else {
                 hud.classList.remove('emergency-active');
                 label.innerText = "PATIENT STABLE";
-                label.classList.remove('text-red-500');
-                label.classList.add('text-emerald-400');
+                label.className = "text-5xl font-black italic tracking-tighter uppercase text-emerald-400";
                 dispatch.classList.add('hidden');
+                icon.innerHTML = '<i data-lucide="shield-check" class="w-10 h-10"></i>';
+                icon.className = "p-6 rounded-[2rem] bg-slate-800 text-slate-500";
             }
+            lucide.createIcons();
         }
 
         // --- 4. VISUAL ANALYTICS (Canvas) ---
@@ -396,28 +431,42 @@
             const canvas = document.getElementById(id);
             if (!canvas) return;
             const ctx = canvas.getContext('2d');
+            
+            // Ensure proper width
+            if (canvas.width !== canvas.parentElement.offsetWidth) {
+                canvas.width = canvas.parentElement.offsetWidth;
+            }
+
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.beginPath();
             ctx.strokeStyle = color;
             ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+
             const step = canvas.width / (hrHistory.length - 1);
             for (let i = 0; i < hrHistory.length; i++) {
                 const x = i * step;
-                const y = canvas.height - ((hrHistory[i] - 60) / 100 * canvas.height);
+                // Scale 60-160 range
+                const normalized = (hrHistory[i] - 60) / 100;
+                const y = canvas.height - (normalized * canvas.height);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
             ctx.stroke();
+            
             if (fill) {
-                ctx.lineTo(canvas.width, canvas.height); ctx.lineTo(0, canvas.height);
-                ctx.fillStyle = 'rgba(16, 185, 129, 0.05)'; ctx.fill();
+                ctx.lineTo(canvas.width, canvas.height);
+                ctx.lineTo(0, canvas.height);
+                ctx.fillStyle = 'rgba(16, 185, 129, 0.05)'; 
+                ctx.fill();
             }
         }
 
         function addLogEntry(type, msg) {
             const log = document.getElementById('eventLog');
+            if(!log) return;
             const div = document.createElement('div');
-            div.className = `p-2 rounded border border-slate-800 ${type === 'CRITICAL' ? 'bg-red-500/10 text-red-500' : 'text-slate-500'}`;
-            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${msg}`;
+            div.className = p-2 rounded border border-slate-800 animate-in slide-in-from-top duration-300 ${type === 'CRITICAL' ? 'bg-red-500/10 text-red-500' : 'text-slate-500'};
+            div.innerHTML = [${new Date().toLocaleTimeString()}] ${msg};
             log.prepend(div);
             if (log.children.length > 10) log.lastChild.remove();
         }
@@ -427,10 +476,14 @@
             setInterval(() => document.getElementById('systemTime').innerText = new Date().toLocaleTimeString(), 1000);
             
             // Map Setup
-            map = L.map('map', { zoomControl: false }).setView([12.9716, 80.2452], 14);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
-            marker = L.marker([12.9716, 80.2452]).addTo(map);
-            radius = L.circle([12.9716, 80.2452], { radius: 2000, color: '#10b981', weight: 1, fillOpacity: 0.05 }).addTo(map);
+            try {
+                map = L.map('map', { zoomControl: false }).setView([12.9716, 80.2452], 14);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+                marker = L.marker([12.9716, 80.2452]).addTo(map);
+                radius = L.circle([12.9716, 80.2452], { radius: 2000, color: '#10b981', weight: 1, fillOpacity: 0.05 }).addTo(map);
+            } catch (e) {
+                console.error("Map Init Error:", e);
+            }
             
             // Resize Canvases
             document.querySelectorAll('canvas').forEach(c => {
@@ -439,6 +492,7 @@
             });
             
             lucide.createIcons();
+            console.log("Dashboard fully initialized.");
         }
     </script>
 </body>
